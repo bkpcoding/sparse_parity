@@ -7,7 +7,7 @@ from tqdm.auto import tqdm
 import wandb
 from omegaconf import DictConfig
 
-from src.data.dataloader import FastTensorDataLoader, get_batch, cycle, TemperatureDataLoader
+from src.data.dataloader import FastTensorDataLoader, get_batch, cycle
 from src.utils.utils import create_loss_animation
 
 class SparseParityTrainer:
@@ -18,7 +18,6 @@ class SparseParityTrainer:
         config: DictConfig,
         task_indices: List[int],
         task_subsets: List[List[int]],
-        sampler_type: str = "uniform"  # Add sampler type parameter
     ):
         """
         Initialize the trainer.
@@ -26,69 +25,29 @@ class SparseParityTrainer:
         Args:
             model: Neural network model
             optimizer: Single optimizer or list of optimizers
-            config: Full configuration object
+            config: Configuration object
             task_indices: List of task indices
             task_subsets: List of subsets for each task
-            sampler_type: Type of sampler to use ("uniform" or "temperature")
         """
         self.model = model
         self.optimizer = optimizer
         self.config = config
         self.task_indices = task_indices
         self.task_subsets = task_subsets
-        self.sampler_type = sampler_type
         
         self.device = torch.device(config.device)
         self.dtype = getattr(torch, config.dtype)
         self.loss_fn = nn.CrossEntropyLoss()
         
-        # Initialize dataloader based on sampler type
-        if sampler_type == "temperature":
-            self.dataloader = TemperatureDataLoader(
-                n_tasks=len(task_indices),
-                n=config.n,
-                Ss=task_subsets,
-                sizes=[config.D // len(task_indices)] * len(task_indices),
-                batch_size=config.batch_size,
-                temperature=config.experiment.temperature,
-                device=self.device,
-                dtype=self.dtype
-            )
-        else:  # uniform sampling
-            # Initialize probability distribution for uniform sampling
-            self.probs = np.ones(len(task_indices)) / len(task_indices)
-            self.cdf = np.cumsum(self.probs)
-            
-            if config.D != -1:
-                self.batch_sizes = [config.D // len(task_indices)] * len(task_indices)
-                self.train_iter = self._initialize_dataloader()
-        
-        # Initialize probability distribution for tasks based on distribution type
-        if config.experiment.distribution_type == "zipf":
-            self.probs = np.array([
-                1.0 / np.power(k + config.experiment.offset, config.experiment.alpha)
-                for k in range(1, len(task_indices) + 1)
-            ])
-            print(f"Zipf probabilities before normalization: {self.probs}")
-        elif config.experiment.distribution_type == "uniform":
-            self.probs = np.ones(len(task_indices))
-            print(f"Uniform probabilities before normalization: {self.probs}")
-        else:
-            raise ValueError(f"Unsupported distribution type: {config.experiment.distribution_type}")
-            
-        # Normalize probabilities to sum to 1
+        # Initialize probability distribution for tasks
+        self.probs = np.array([
+            np.power(config.n, -config.alpha) 
+            for n in range(1 + config.offset, config.n_tasks + config.offset + 1)
+        ])
         self.probs = self.probs / np.sum(self.probs)
-        print(f"Final normalized probabilities: {self.probs}")
-        
         self.cdf = np.cumsum(self.probs)
         
-        # Calculate test batch sizes based on the distribution
-        if config.D != -1:
-            self.batch_sizes = [int(prob * config.D) for prob in self.probs]
-            # Adjust for rounding errors to ensure total matches D
-            self.batch_sizes[-1] += config.D - sum(self.batch_sizes)
-            print(f"Batch sizes per task: {self.batch_sizes}")
-        
+        # Calculate test batch sizes
         self.test_batch_sizes = [
             int(prob * config.test_points) for prob in self.probs
         ]
@@ -100,11 +59,11 @@ class SparseParityTrainer:
     def _initialize_dataloader(self) -> iter:
         """Initialize the data loader for fixed dataset size."""
         samples = np.searchsorted(self.cdf, np.random.rand(self.config.D,))
-        hist, _ = np.histogram(samples, bins=len(self.task_indices), 
-                             range=(0, len(self.task_indices)-1))
-        print(f"Actual sample distribution: {hist}")
+        hist, _ = np.histogram(samples, bins=self.config.n_tasks, 
+                             range=(0, self.config.n_tasks-1))
+        
         train_x, train_y = get_batch(
-            n_tasks=len(self.task_indices),
+            n_tasks=self.config.n_tasks,
             n=self.config.n,
             Ss=self.task_subsets,
             codes=self.task_indices,

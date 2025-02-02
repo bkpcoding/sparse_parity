@@ -1,0 +1,8 @@
+Metadata-Version: 2.1
+Name: sparse_parity
+Version: 0.1
+Requires-Dist: numpy
+Requires-Dist: torch
+Requires-Dist: wandb
+Requires-Dist: hydra-core
+Requires-Dist: tqdm
