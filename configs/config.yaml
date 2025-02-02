@@ -1,0 +1,34 @@
+defaults:
+  - _self_
+  - optimizer: muon  # or 'both' to compare all optimizers
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+# Base configuration
+n_tasks: 5
+n: 50
+k: 4
+alpha: 1.5
+offset: 0
+
+# Training parameters
+D: 200000  # -1 for infinite data
+width: 100
+depth: 2
+activation: "ReLU"
+steps: 250000
+batch_size: 10000
+test_points: 30000
+test_points_per_task: 1000
+stop_early: false
+n_ensembles: 1
+
+
+# Device and dtype settings
+device: ${oc.env:DEVICE,"cuda:0"}
+dtype: "float32"
+
+# Logging
+log_freq: 250  # This will log approximately 1000 times during training (250000 steps / 250)
+verbose: false
+use_wandb: false  # or false to disable wandb logging

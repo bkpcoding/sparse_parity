@@ -1,0 +1,15 @@
+optimizer_mode: "both"
+
+# SGD parameters
+sgd_lr: 0.1
+momentum: 0.9
+
+# AdamW parameters
+adamw_lr: 3e-4
+weight_decay: 0.01
+
+# Muon parameters
+muon_lr: 0.02
+muon_momentum: 0.95
+muon_nesterov: true
+muon_ns_steps: 5

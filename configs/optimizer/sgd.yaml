@@ -1,0 +1,5 @@
+optimizer_mode: "sgd"
+
+# SGD parameters
+sgd_lr: 1e-2
+momentum: 0.9

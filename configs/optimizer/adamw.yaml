@@ -1,0 +1,5 @@
+optimizer_mode: "adamw"
+
+# AdamW parameters
+adamw_lr: 1e-3
+weight_decay: 0.0
