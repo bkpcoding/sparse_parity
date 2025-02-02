@@ -1,9 +1,0 @@
-
-Running ensemble 1/1
-Random tasks: [(2, 24, 26, 48), (16, 25, 31, 32), (19, 22, 30, 37), (8, 13, 18, 32), (6, 8, 39, 48)]
- 22%|████████████████████████████▎                                                                                                 | 56250/250000 [00:21<01:14, 2599.10it/s]
-
-Ensemble Statistics:
-AdamW optimizer:
-  Mean steps: 56250.00
-  Std steps: 0.00
