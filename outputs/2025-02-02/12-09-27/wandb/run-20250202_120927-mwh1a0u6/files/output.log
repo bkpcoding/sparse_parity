@@ -1,0 +1,25 @@
+
+Running ensemble 1/1
+Random tasks: [(2, 24, 26, 48), (16, 25, 31, 32), (19, 22, 30, 37), (8, 13, 18, 32), (6, 8, 39, 48)]
+  0%|                                                                                                                                            | 0/250000 [00:00<?, ?it/s]
+Error executing job with overrides: ['optimizer=muon']
+Traceback (most recent call last):
+  File "/home/bpatil/workspace/sparse_parity/sparse_parity_optimizer.py", line 293, in run
+    steps_muon, loss_data = train_model(
+  File "/home/bpatil/workspace/sparse_parity/sparse_parity_optimizer.py", line 187, in train_model
+    opt.step()
+  File "/home/bpatil/miniforge3/envs/baku/lib/python3.9/site-packages/torch/optim/optimizer.py", line 487, in wrapper
+    out = func(*args, **kwargs)
+  File "/home/bpatil/miniforge3/envs/baku/lib/python3.9/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/bpatil/miniforge3/envs/baku/lib/python3.9/site-packages/muon.py", line 101, in step
+    handle = dist.all_gather_into_tensor(update_buffer, g, async_op=True)
+  File "/home/bpatil/miniforge3/envs/baku/lib/python3.9/site-packages/torch/distributed/c10d_logger.py", line 83, in wrapper
+    return func(*args, **kwargs)
+  File "/home/bpatil/miniforge3/envs/baku/lib/python3.9/site-packages/torch/distributed/distributed_c10d.py", line 3424, in all_gather_into_tensor
+    group = group or _get_default_group()
+  File "/home/bpatil/miniforge3/envs/baku/lib/python3.9/site-packages/torch/distributed/distributed_c10d.py", line 1150, in _get_default_group
+    raise ValueError(
+ValueError: Default process group has not been initialized, please make sure to call init_process_group.
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.

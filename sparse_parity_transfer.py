@@ -274,7 +274,7 @@ def tasks_equal(tasks1, tasks2):
 
 def train_model(model, Ss, n_tasks, n, k, alpha, offset, D, batch_size, lr, weight_decay,
                 test_points, test_points_per_task, steps, device, dtype, log_freq, 
-                stop_early=False, verbose=False):
+                stop_early=False, verbose=False, store_losses=False):
     """Train the model and return number of steps to convergence."""
     
     probs = np.array([np.power(n, -alpha) for n in range(1+offset, n_tasks+offset+1)])
@@ -300,6 +300,11 @@ def train_model(model, Ss, n_tasks, n, k, alpha, offset, D, batch_size, lr, weig
     losses = []
     early_stop_triggers = []
     
+    # Initialize loss tracking if needed
+    if store_losses:
+        log_steps = []
+        losses_subtasks = {str(i): [] for i in range(n_tasks)}
+    
     for step in tqdm(range(steps)):
         if step % log_freq == 0:
             with torch.no_grad():
@@ -315,24 +320,16 @@ def train_model(model, Ss, n_tasks, n, k, alpha, offset, D, batch_size, lr, weig
                 if loss <= 1e-6:
                     if verbose:
                         print(f"Converged at step {step} with loss {loss}")
-                    return step
+                    return step, (log_steps, losses_subtasks) if store_losses else None
                 
-                # Store per-task losses for the animation
-                if 'losses_subtasks_one_bit' in ex.info and tasks_equal(Ss, get_one_bit_different_tasks(n, k, n_tasks)):
-                    ex.info['log_steps_one_bit'].append(step)
+                # Store per-task losses if requested
+                if store_losses:
+                    log_steps.append(step)
                     for i in range(n_tasks):
                         x_i, y_i = get_batch(n_tasks=n_tasks, n=n, Ss=[Ss[i]], codes=[i],
                                            sizes=[test_points_per_task], device=device, dtype=dtype)
                         y_i_pred = model(x_i)
-                        ex.info['losses_subtasks_one_bit'][str(i)].append(loss_fn(y_i_pred, y_i).item())
-                
-                elif 'losses_subtasks_random' in ex.info and tasks_equal(Ss, get_random_tasks(n, k, n_tasks)):
-                    ex.info['log_steps_random'].append(step)
-                    for i in range(n_tasks):
-                        x_i, y_i = get_batch(n_tasks=n_tasks, n=n, Ss=[Ss[i]], codes=[i],
-                                           sizes=[test_points_per_task], device=device, dtype=dtype)
-                        y_i_pred = model(x_i)
-                        ex.info['losses_subtasks_random'][str(i)].append(loss_fn(y_i_pred, y_i).item())
+                        losses_subtasks[str(i)].append(loss_fn(y_i_pred, y_i).item())
                 
                 # Early stopping logic
                 if stop_early:
@@ -359,7 +356,7 @@ def train_model(model, Ss, n_tasks, n, k, alpha, offset, D, batch_size, lr, weig
         loss.backward()
         optimizer.step()
     
-    return steps  # Return max steps if convergence not reached
+    return steps, (log_steps, losses_subtasks) if store_losses else None
 
 @ex.automain
 def run(n_tasks, n, k, comparison_mode, alpha, offset, D, width, depth,
@@ -449,6 +446,7 @@ def run(n_tasks, n, k, comparison_mode, alpha, offset, D, width, depth,
     
     for ensemble_idx in range(n_ensembles):
         print(f"\nRunning ensemble {ensemble_idx + 1}/{n_ensembles}")
+        is_last_ensemble = ensemble_idx == n_ensembles - 1
         
         # Run one-bit difference comparison
         if comparison_mode in ['one_bit_diff', 'both']:
@@ -456,25 +454,20 @@ def run(n_tasks, n, k, comparison_mode, alpha, offset, D, width, depth,
             print(f"One-bit difference tasks: {Ss_one_bit}")
             mlp_one_bit = create_model(n_tasks, n, width, depth, activation_fn, device, dtype)
             
-            # Store losses for the first ensemble run only
-            if ensemble_idx == 0:
-                ex.info['losses_subtasks_one_bit'] = dict()
-                ex.info['log_steps_one_bit'] = list()
-                for i in range(n_tasks):
-                    ex.info['losses_subtasks_one_bit'][str(i)] = list()
-            
-            steps_one_bit = train_model(
+            steps_one_bit, loss_data = train_model(
                 mlp_one_bit, Ss_one_bit, n_tasks, n, k, alpha, offset, D,
                 batch_size, lr, weight_decay, test_points, test_points_per_task,
-                steps, device, dtype, log_freq, stop_early, verbose
+                steps, device, dtype, log_freq, stop_early, verbose,
+                store_losses=is_last_ensemble
             )
             ensemble_results['one_bit'].append(steps_one_bit)
             
-            # Create animation for the first ensemble run only
-            if ensemble_idx == 0:
+            # Create animation for the last ensemble run
+            if is_last_ensemble and loss_data:
+                log_steps, losses_subtasks = loss_data
                 gif_path = create_loss_animation(
-                    ex.info['losses_subtasks_one_bit'],
-                    ex.info['log_steps_one_bit'],
+                    losses_subtasks,
+                    log_steps,
                     'one_bit_diff'
                 )
                 if verbose:
@@ -486,25 +479,20 @@ def run(n_tasks, n, k, comparison_mode, alpha, offset, D, width, depth,
             print(f"Random tasks: {Ss_random}")
             mlp_random = create_model(n_tasks, n, width, depth, activation_fn, device, dtype)
             
-            # Store losses for the first ensemble run only
-            if ensemble_idx == 0:
-                ex.info['losses_subtasks_random'] = dict()
-                ex.info['log_steps_random'] = list()
-                for i in range(n_tasks):
-                    ex.info['losses_subtasks_random'][str(i)] = list()
-            
-            steps_random = train_model(
+            steps_random, loss_data = train_model(
                 mlp_random, Ss_random, n_tasks, n, k, alpha, offset, D,
                 batch_size, lr, weight_decay, test_points, test_points_per_task,
-                steps, device, dtype, log_freq, stop_early, verbose
+                steps, device, dtype, log_freq, stop_early, verbose,
+                store_losses=is_last_ensemble
             )
             ensemble_results['random'].append(steps_random)
             
-            # Create animation for the first ensemble run only
-            if ensemble_idx == 0:
+            # Create animation for the last ensemble run
+            if is_last_ensemble and loss_data:
+                log_steps, losses_subtasks = loss_data
                 gif_path = create_loss_animation(
-                    ex.info['losses_subtasks_random'],
-                    ex.info['log_steps_random'],
+                    losses_subtasks,
+                    log_steps,
                     'random'
                 )
                 if verbose:

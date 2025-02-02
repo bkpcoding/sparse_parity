@@ -1,0 +1,25 @@
+n_tasks: 5
+'n': 50
+k: 4
+alpha: 1.5
+offset: 0
+D: 200000
+width: 100
+depth: 2
+activation: ReLU
+steps: 250000
+batch_size: 10000
+test_points: 30000
+test_points_per_task: 1000
+stop_early: false
+device: ${oc.env:DEVICE,"cuda:0"}
+dtype: float32
+log_freq: 250
+verbose: false
+n_ensembles: 1
+optimizer:
+  optimizer_mode: adamw
+  sgd_lr: null
+  momentum: null
+  adamw_lr: 0.001
+  weight_decay: 0.0
