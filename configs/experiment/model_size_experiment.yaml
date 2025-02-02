@@ -1,0 +1,47 @@
+defaults:
+  - _self_
+  - ../base_config@_global_
+  - ../optimizer@_global_: both
+
+# Model size specific parameters
+depths: [2, 4, 6, 8, 10]
+base_width: 100
+
+# Override any base config parameters if needed
+n_ensembles: 3
+use_wandb: false
+
+# Ensure parameters are at root level
+hydra:
+  output_subdir: null  # Disable hydra output directory
+  run:
+    dir: .  # Run in current directory
+
+# Make config non-strict to allow new parameters
+_target_: builtins.dict  # This makes the config non-strict
+
+# Model configuration
+n_tasks: 5
+n: 50
+k: 4
+activation: 'ReLU'
+
+# Training configuration
+steps: 250000
+batch_size: 10000
+lr: 1e-3
+weight_decay: 0.0
+test_points: 30000
+test_points_per_task: 1000
+stop_early: false
+
+# Data configuration
+D: 200000  # -1 for infinite data
+alpha: 1.5
+offset: 0
+
+device: 'cuda:0'
+dtype: 'float32'
+log_freq: 250
+verbose: false
+plot_losses: false

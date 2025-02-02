@@ -51,3 +51,51 @@ class FastTensorDataLoader:
 
     def __len__(self):
         return self.n_batches
+
+
+def get_batch(n_tasks, n, Ss, codes, sizes, device='cpu', dtype=torch.float32):
+    """Creates batch. 
+
+    Parameters
+    ----------
+    n_tasks : int
+        Number of tasks.
+    n : int
+        Bit string length for sparse parity problem.
+    Ss : list of lists of ints
+        Subsets of [1, ... n] to compute sparse parities on.
+    codes : list of int
+        The subtask indices which the batch will consist of
+    sizes : list of int
+        Number of samples for each subtask
+    device : str
+        Device to put batch on.
+    dtype : torch.dtype
+        Data type to use for input x. Output y is torch.int64.
+
+    Returns
+    -------
+    x : torch.Tensor
+        inputs
+    y : torch.Tensor
+        labels
+    """
+    batch_x = torch.zeros((sum(sizes), n_tasks+n), dtype=dtype, device=device)
+    batch_y = torch.zeros((sum(sizes),), dtype=torch.int64, device=device)
+    start_i = 0
+    for (S, size, code) in zip(Ss, sizes, codes):
+        if size > 0:
+            x = torch.randint(low=0, high=2, size=(size, n), dtype=dtype, device=device)
+            y = torch.sum(x[:, S], dim=1) % 2
+            x_task_code = torch.zeros((size, n_tasks), dtype=dtype, device=device)
+            x_task_code[:, code] = 1
+            x = torch.cat([x_task_code, x], dim=1)
+            batch_x[start_i:start_i+size, :] = x
+            batch_y[start_i:start_i+size] = y
+            start_i += size
+    return batch_x, batch_y
+    
+def cycle(iterable):
+    while True:
+        for x in iterable:
+            yield x

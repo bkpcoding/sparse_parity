@@ -1,1 +1,7 @@
 __pycache__
+.egg-info
+.hydra
+.mypy_cache
+.ruff_cache
+.vscode
+.venv

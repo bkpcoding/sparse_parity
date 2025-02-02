@@ -1,0 +1,16 @@
+defaults:
+  - _self_
+  - ../base_config@_global_
+  - ../optimizer@_global_: both
+
+hydra:
+  job_logging:
+    root:
+      level: ERROR
+  logging:
+    root:
+      level: ERROR
+
+# Experiment specific overrides
+n_ensembles: 1
+use_wandb: true

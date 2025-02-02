@@ -1,0 +1,21 @@
+defaults:
+  - _self_
+  - ../base_config@_global_
+  - ../optimizer@_global_: both
+
+# Transfer learning specific parameters
+comparison_mode: "both"  # 'one_bit_diff', 'random', or 'both'
+lr: 1e-3
+weight_decay: 0.01
+
+# Override any base config parameters if needed
+use_wandb: false
+
+# Ensure parameters are at root level
+hydra:
+  output_subdir: null  # Disable hydra output directory
+  run:
+    dir: .  # Run in current directory
+
+# Make config non-strict to allow new parameters
+_target_: builtins.dict  # This makes the config non-strict
