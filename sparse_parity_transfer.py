@@ -221,8 +221,8 @@ def cfg():
     alpha = 1.5
     offset = 0
 
-    # D = 200000 # -1 for infinite data
-    D = -1
+    D = 200000 # -1 for infinite data
+    # D = -1
     width = 100
     depth = 2
     activation = 'ReLU'
@@ -240,6 +240,8 @@ def cfg():
 
     log_freq = max(1, steps // 1000)
     verbose=False
+
+    n_ensembles = 1  # Add this new parameter for number of ensemble runs
 
 # --------------------------
 #  |-|    *
@@ -263,6 +265,12 @@ def create_model(n_tasks, n, width, depth, activation_fn, device, dtype):
             layers.append(nn.Linear(width, width))
             layers.append(activation_fn())
     return nn.Sequential(*layers).to(device)
+
+def tasks_equal(tasks1, tasks2):
+    """Compare two lists of tasks for equality."""
+    if len(tasks1) != len(tasks2):
+        return False
+    return all(tuple(t1) == tuple(t2) for t1, t2 in zip(tasks1, tasks2))
 
 def train_model(model, Ss, n_tasks, n, k, alpha, offset, D, batch_size, lr, weight_decay,
                 test_points, test_points_per_task, steps, device, dtype, log_freq, 
@@ -309,6 +317,23 @@ def train_model(model, Ss, n_tasks, n, k, alpha, offset, D, batch_size, lr, weig
                         print(f"Converged at step {step} with loss {loss}")
                     return step
                 
+                # Store per-task losses for the animation
+                if 'losses_subtasks_one_bit' in ex.info and tasks_equal(Ss, get_one_bit_different_tasks(n, k, n_tasks)):
+                    ex.info['log_steps_one_bit'].append(step)
+                    for i in range(n_tasks):
+                        x_i, y_i = get_batch(n_tasks=n_tasks, n=n, Ss=[Ss[i]], codes=[i],
+                                           sizes=[test_points_per_task], device=device, dtype=dtype)
+                        y_i_pred = model(x_i)
+                        ex.info['losses_subtasks_one_bit'][str(i)].append(loss_fn(y_i_pred, y_i).item())
+                
+                elif 'losses_subtasks_random' in ex.info and tasks_equal(Ss, get_random_tasks(n, k, n_tasks)):
+                    ex.info['log_steps_random'].append(step)
+                    for i in range(n_tasks):
+                        x_i, y_i = get_batch(n_tasks=n_tasks, n=n, Ss=[Ss[i]], codes=[i],
+                                           sizes=[test_points_per_task], device=device, dtype=dtype)
+                        y_i_pred = model(x_i)
+                        ex.info['losses_subtasks_random'][str(i)].append(loss_fn(y_i_pred, y_i).item())
+                
                 # Early stopping logic
                 if stop_early:
                     if step > 4000 and len(losses) >= 2 and losses[-1] > losses[-2]:
@@ -339,7 +364,8 @@ def train_model(model, Ss, n_tasks, n, k, alpha, offset, D, batch_size, lr, weig
 @ex.automain
 def run(n_tasks, n, k, comparison_mode, alpha, offset, D, width, depth,
         activation, test_points, test_points_per_task, steps, batch_size,
-        lr, weight_decay, stop_early, device, dtype, log_freq, verbose, seed, _log):
+        lr, weight_decay, stop_early, device, dtype, log_freq, verbose, seed, 
+        n_ensembles, _log):
     
     # Set random seeds
     torch.set_default_dtype(dtype)
@@ -348,7 +374,6 @@ def run(n_tasks, n, k, comparison_mode, alpha, offset, D, width, depth,
     random.seed(seed)
     np.random.seed(seed)
     
-    # Set activation function
     if activation == 'ReLU':
         activation_fn = nn.ReLU
     elif activation == 'Tanh':
@@ -358,47 +383,166 @@ def run(n_tasks, n, k, comparison_mode, alpha, offset, D, width, depth,
     else:
         assert False, f"Unrecognized activation function identifier: {activation}"
     
+    def create_loss_animation(losses_subtasks, log_steps, method_name):
+        """Create and save loss animation for a specific method."""
+        if not log_steps:  # Check if log_steps is empty
+            print(f"Warning: No loss data collected for {method_name} method")
+            return None
+        
+        n_tasks = len(losses_subtasks)
+        
+        # Create a figure and axis
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.set_xlabel('Training Step')
+        ax.set_ylabel('Loss')
+        ax.set_title(f'Per-Task Loss Over Training Steps ({method_name})')
+        ax.set_yscale('log')
+        
+        # Generate colors for each task
+        colors = cm.viridis(np.linspace(0, 1, n_tasks))
+        
+        # Initialize lines for each task
+        lines = []
+        for i in range(n_tasks):
+            line, = ax.plot([], [], color=colors[i], alpha=0.5)
+            lines.append(line)
+        
+        # Set axis limits
+        all_losses = [loss for task_loss in losses_subtasks.values() for loss in task_loss]
+        min_step = min(log_steps)
+        max_step = max(log_steps)
+        min_loss = max(1e-6, min(all_losses))
+        max_loss = max(all_losses)
+        ax.set_xlim(min_step, max_step)
+        ax.set_ylim(min_loss * 0.9, max_loss * 1.1)
+        
+        def update(frame):
+            for i in range(n_tasks):
+                x_data = log_steps[:frame+1]
+                y_data = losses_subtasks[str(i)][:frame+1]
+                lines[i].set_data(x_data, y_data)
+            return lines
+        
+        ani = FuncAnimation(
+            fig,
+            update,
+            frames=len(log_steps),
+            interval=50,
+            blit=True,
+            repeat=False
+        )
+        
+        # Save as GIF
+        gif_path = f'per_task_loss_animation_{method_name}.gif'
+        ani.save(
+            gif_path,
+            writer='pillow',
+            fps=60,
+            progress_callback=lambda i, n: print(f"Saving frame {i}/{n}") if verbose else None
+        )
+        ex.add_artifact(gif_path)
+        plt.close(fig)
+        return gif_path
+
+    # Initialize lists to store results for each ensemble
+    ensemble_results = defaultdict(list)
+    
+    for ensemble_idx in range(n_ensembles):
+        print(f"\nRunning ensemble {ensemble_idx + 1}/{n_ensembles}")
+        
+        # Run one-bit difference comparison
+        if comparison_mode in ['one_bit_diff', 'both']:
+            Ss_one_bit = get_one_bit_different_tasks(n, k, n_tasks)
+            print(f"One-bit difference tasks: {Ss_one_bit}")
+            mlp_one_bit = create_model(n_tasks, n, width, depth, activation_fn, device, dtype)
+            
+            # Store losses for the first ensemble run only
+            if ensemble_idx == 0:
+                ex.info['losses_subtasks_one_bit'] = dict()
+                ex.info['log_steps_one_bit'] = list()
+                for i in range(n_tasks):
+                    ex.info['losses_subtasks_one_bit'][str(i)] = list()
+            
+            steps_one_bit = train_model(
+                mlp_one_bit, Ss_one_bit, n_tasks, n, k, alpha, offset, D,
+                batch_size, lr, weight_decay, test_points, test_points_per_task,
+                steps, device, dtype, log_freq, stop_early, verbose
+            )
+            ensemble_results['one_bit'].append(steps_one_bit)
+            
+            # Create animation for the first ensemble run only
+            if ensemble_idx == 0:
+                gif_path = create_loss_animation(
+                    ex.info['losses_subtasks_one_bit'],
+                    ex.info['log_steps_one_bit'],
+                    'one_bit_diff'
+                )
+                if verbose:
+                    print(f"One-bit difference animation saved to {gif_path}")
+        
+        # Run random tasks comparison
+        if comparison_mode in ['random', 'both']:
+            Ss_random = get_random_tasks(n, k, n_tasks)
+            print(f"Random tasks: {Ss_random}")
+            mlp_random = create_model(n_tasks, n, width, depth, activation_fn, device, dtype)
+            
+            # Store losses for the first ensemble run only
+            if ensemble_idx == 0:
+                ex.info['losses_subtasks_random'] = dict()
+                ex.info['log_steps_random'] = list()
+                for i in range(n_tasks):
+                    ex.info['losses_subtasks_random'][str(i)] = list()
+            
+            steps_random = train_model(
+                mlp_random, Ss_random, n_tasks, n, k, alpha, offset, D,
+                batch_size, lr, weight_decay, test_points, test_points_per_task,
+                steps, device, dtype, log_freq, stop_early, verbose
+            )
+            ensemble_results['random'].append(steps_random)
+            
+            # Create animation for the first ensemble run only
+            if ensemble_idx == 0:
+                gif_path = create_loss_animation(
+                    ex.info['losses_subtasks_random'],
+                    ex.info['log_steps_random'],
+                    'random'
+                )
+                if verbose:
+                    print(f"Random tasks animation saved to {gif_path}")
+    
+    # Calculate and print ensemble statistics
+    print("\nEnsemble Statistics:")
     results = {}
     
-    # Run one-bit difference comparison
     if comparison_mode in ['one_bit_diff', 'both']:
-        Ss_one_bit = get_one_bit_different_tasks(n, k, n_tasks)
-        print(f"One-bit difference tasks: {Ss_one_bit}")
-        mlp_one_bit = create_model(n_tasks, n, width, depth, activation_fn, device, dtype)
-        steps_one_bit = train_model(
-            mlp_one_bit, Ss_one_bit, n_tasks, n, k, alpha, offset, D,
-            batch_size, lr, weight_decay, test_points, test_points_per_task,
-            steps, device, dtype, log_freq, stop_early, verbose
-        )
-        results['one_bit'] = steps_one_bit
+        one_bit_mean = np.mean(ensemble_results['one_bit'])
+        one_bit_std = np.std(ensemble_results['one_bit'])
+        print(f"One-bit difference tasks:")
+        print(f"  Mean steps: {one_bit_mean:.2f}")
+        print(f"  Std steps: {one_bit_std:.2f}")
+        results['one_bit_mean'] = one_bit_mean
+        results['one_bit_std'] = one_bit_std
+        ex.info['convergence_steps_one_bit_mean'] = one_bit_mean
+        ex.info['convergence_steps_one_bit_std'] = one_bit_std
     
-    # Run random tasks comparison
     if comparison_mode in ['random', 'both']:
-        Ss_random = get_random_tasks(n, k, n_tasks)
-        print(f"Random tasks: {Ss_random}")
-        mlp_random = create_model(n_tasks, n, width, depth, activation_fn, device, dtype)
-        steps_random = train_model(
-            mlp_random, Ss_random, n_tasks, n, k, alpha, offset, D,
-            batch_size, lr, weight_decay, test_points, test_points_per_task,
-            steps, device, dtype, log_freq, stop_early, verbose
-        )
-        results['random'] = steps_random
+        random_mean = np.mean(ensemble_results['random'])
+        random_std = np.std(ensemble_results['random'])
+        print(f"Random tasks:")
+        print(f"  Mean steps: {random_mean:.2f}")
+        print(f"  Std steps: {random_std:.2f}")
+        results['random_mean'] = random_mean
+        results['random_std'] = random_std
+        ex.info['convergence_steps_random_mean'] = random_mean
+        ex.info['convergence_steps_random_std'] = random_std
     
-    # Print and store results
     if comparison_mode == 'both':
-        print(f"\nConvergence Comparison:")
-        print(f"One-bit difference tasks: {results['one_bit']} steps")
-        print(f"Random tasks: {results['random']} steps")
-        print(f"Difference: {abs(results['one_bit'] - results['random'])} steps")
+        mean_diff = abs(one_bit_mean - random_mean)
+        print(f"\nMean difference: {mean_diff:.2f} steps")
+        results['mean_difference'] = mean_diff
+        ex.info['convergence_mean_difference'] = mean_diff
         
-        ex.info['convergence_steps_one_bit'] = results['one_bit']
-        ex.info['convergence_steps_random'] = results['random']
-        ex.info['convergence_difference'] = abs(results['one_bit'] - results['random'])
-    elif comparison_mode == 'one_bit_diff':
-        print(f"\nOne-bit difference tasks convergence: {results['one_bit']} steps")
-        ex.info['convergence_steps_one_bit'] = results['one_bit']
-    else:
-        print(f"\nRandom tasks convergence: {results['random']} steps")
-        ex.info['convergence_steps_random'] = results['random']
+        # Store raw ensemble results for further analysis if needed
+        ex.info['ensemble_results'] = dict(ensemble_results)
     
     return results
