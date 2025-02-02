@@ -1,5 +1,0 @@
-numpy
-torch
-wandb
-hydra-core
-tqdm
