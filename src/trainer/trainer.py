@@ -7,7 +7,7 @@ from tqdm.auto import tqdm
 import wandb
 from omegaconf import DictConfig
 
-from src.data.dataloader import FastTensorDataLoader, get_batch, cycle, TemperatureDataLoader
+from src.data.dataloader import FastTensorDataLoader, get_batch, cycle, TemperatureDataLoader, OnlineDataMixingSampler
 from src.utils.utils import create_loss_animation
 
 class SparseParityTrainer:
@@ -18,7 +18,7 @@ class SparseParityTrainer:
         config: DictConfig,
         task_indices: List[int],
         task_subsets: List[List[int]],
-        sampler_type: str = "uniform"  # Add sampler type parameter
+        sampler_type: str = "uniform"  # Now supports "uniform", "temperature", or "online_mixing"
     ):
         """
         Initialize the trainer.
@@ -29,7 +29,7 @@ class SparseParityTrainer:
             config: Full configuration object
             task_indices: List of task indices
             task_subsets: List of subsets for each task
-            sampler_type: Type of sampler to use ("uniform" or "temperature")
+            sampler_type: Type of sampler to use ("uniform", "temperature", or "online_mixing")
         """
         self.model = model
         self.optimizer = optimizer
@@ -54,13 +54,25 @@ class SparseParityTrainer:
                 device=self.device,
                 dtype=self.dtype
             )
+        elif sampler_type == "online_mixing":
+            self.dataloader = OnlineDataMixingSampler(
+                n_tasks=len(task_indices),
+                n=config.n,
+                Ss=task_subsets,
+                sizes=[config.D // len(task_indices)] * len(task_indices),
+                batch_size=config.batch_size,
+                alpha_decay=config.experiment.alpha_decay,  # New parameter for ODM
+                warmup_steps=config.experiment.warmup_steps,  # New parameter for ODM
+                device=self.device,
+                dtype=self.dtype
+            )
         else:  # uniform sampling
             # Initialize probability distribution for uniform sampling
             self.probs = np.ones(len(task_indices)) / len(task_indices)
             self.cdf = np.cumsum(self.probs)
-            
             if config.D != -1:
                 self.batch_sizes = [config.D // len(task_indices)] * len(task_indices)
+                print(f"Batch sizes under uniform sampling: {self.batch_sizes}")
                 self.train_iter = self._initialize_dataloader()
         
         # Initialize probability distribution for tasks based on distribution type
@@ -126,6 +138,17 @@ class SparseParityTrainer:
     
     def _get_batch(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get a batch of data, either from dataloader or generated on-the-fly."""
+        if self.sampler_type in ["temperature", "online_mixing"]:
+            if self.sampler_type == "online_mixing":
+                x, y, dataset_idx = next(iter(self.dataloader))
+                # Update sampling probabilities based on loss
+                if hasattr(self, 'last_loss') and hasattr(self, 'last_dataset_idx'):
+                    self.dataloader.update_policy(self.last_dataset_idx, self.last_loss)
+                self.last_dataset_idx = dataset_idx
+                return x, y
+            return next(iter(self.dataloader))
+        
+        # Uniform sampling logic
         if self.config.D != -1:
             return next(self.train_iter)
         
@@ -155,6 +178,10 @@ class SparseParityTrainer:
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
+        
+        # Store loss for ODM if using online mixing
+        if self.sampler_type == "online_mixing":
+            self.last_loss = loss.item()
     
     def train(self) -> Tuple[int, Optional[Tuple]]:
         """

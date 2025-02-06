@@ -2,14 +2,16 @@ defaults:
   - _self_
   - ../base_config@_global_
 
-comparison_mode: "temperature"  # Options: uniform, temperature, both
+comparison_mode: "all"  # Options: uniform, temperature, online_mixing, all
 use_wandb: false
 lr: 0.001
 weight_decay: 0.0
 temperature: 3.0  # Initial temperature for temperature sampling
 distribution_type: "zipf"
-alpha: 1.0
+alpha: 2.0
 offset: 0
+warmup_steps: 2000
+alpha_decay: 0.9
 
 n_ensembles: 1
-plot_losses: false
+plot_losses: true

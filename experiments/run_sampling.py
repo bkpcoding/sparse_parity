@@ -60,9 +60,17 @@ def run_sampling_experiment(cfg: DictConfig):
         # Generate random tasks for this experiment
         task_subsets = get_random_tasks(cfg.n, cfg.k, cfg.n_tasks)
         
-        # Run uniform sampling
-        if cfg.experiment.comparison_mode in ['uniform', 'both']:
-            print("Running with uniform sampling...")
+        # Run each sampling method based on comparison_mode
+        sampling_methods = []
+        if cfg.experiment.comparison_mode == 'all':
+            sampling_methods = ['uniform', 'temperature', 'online_mixing']
+        elif cfg.experiment.comparison_mode == 'both':
+            sampling_methods = ['uniform', 'temperature']
+        else:
+            sampling_methods = [cfg.experiment.comparison_mode]
+
+        for method in sampling_methods:
+            print(f"Running with {method} sampling...")
             model = create_model(cfg.n_tasks, cfg.n, cfg.width, cfg.depth, 
                                activation_fn, device, dtype)
             optimizer = torch.optim.AdamW(model.parameters(), 
@@ -75,40 +83,14 @@ def run_sampling_experiment(cfg: DictConfig):
                 config=cfg,
                 task_indices=list(range(cfg.n_tasks)),
                 task_subsets=task_subsets,
-                sampler_type="uniform"
+                sampler_type=method
             )
 
             steps, loss_data = trainer.train()
-            ensemble_results['uniform'].append(steps)
-
-            if is_last_ensemble and loss_data and cfg.plot_losses:
+            ensemble_results[method].append(steps)
+            if is_last_ensemble and loss_data and cfg.experiment.plot_losses:
                 log_steps, losses_subtasks = loss_data
-                create_loss_animation(losses_subtasks, log_steps, 'uniform')
-
-        # Run temperature sampling
-        if cfg.experiment.comparison_mode in ['temperature', 'both']:
-            print("Running with temperature sampling...")
-            model = create_model(cfg.n_tasks, cfg.n, cfg.width, cfg.depth, 
-                               activation_fn, device, dtype)
-            optimizer = torch.optim.AdamW(model.parameters(), 
-                                        lr=cfg.experiment.lr, 
-                                        weight_decay=cfg.experiment.weight_decay)
-            
-            trainer = SparseParityTrainer(
-                model=model,
-                optimizer=optimizer,
-                config=cfg,
-                task_indices=list(range(cfg.n_tasks)),
-                task_subsets=task_subsets,
-                sampler_type="temperature"
-            )
-
-            steps, loss_data = trainer.train()
-            ensemble_results['temperature'].append(steps)
-
-            if is_last_ensemble and loss_data and cfg.plot_losses:
-                log_steps, losses_subtasks = loss_data
-                create_loss_animation(losses_subtasks, log_steps, 'temperature')
+                create_loss_animation(losses_subtasks, log_steps, method)
 
         # Log results for this ensemble
         for method in ensemble_results:
@@ -129,19 +111,24 @@ def run_sampling_experiment(cfg: DictConfig):
                         f'convergence_steps_{method}_std': std_steps
                     })
 
-    # Log comparison metrics if running both methods
-    if cfg.experiment.comparison_mode == 'both':
-        temp_mean = results['temperature_mean']
-        uniform_mean = results['uniform_mean']
-        mean_diff = abs(temp_mean - uniform_mean)
-        print(f"\nMean difference (Temperature vs Uniform): {mean_diff:.2f} steps")
-        results['mean_difference'] = mean_diff
-        
-        if cfg.experiment.use_wandb:
-            wandb.log({
-                'convergence_mean_difference': mean_diff,
-                'ensemble_results': dict(ensemble_results)
-            })
+    # Log comparison metrics if running multiple methods
+    if len(sampling_methods) > 1:
+        # Print pairwise comparisons
+        methods = list(results.keys())
+        for i in range(len(methods)):
+            for j in range(i + 1, len(methods)):
+                method1 = methods[i].replace('_mean', '')
+                method2 = methods[j].replace('_mean', '')
+                mean1 = results[f'{method1}_mean']
+                mean2 = results[f'{method2}_mean']
+                mean_diff = abs(mean1 - mean2)
+                print(f"\nMean difference ({method1} vs {method2}): {mean_diff:.2f} steps")
+                results[f'mean_difference_{method1}_{method2}'] = mean_diff
+                
+                if cfg.experiment.use_wandb:
+                    wandb.log({
+                        f'convergence_mean_difference_{method1}_{method2}': mean_diff
+                    })
 
     # Close wandb
     if cfg.experiment.use_wandb:

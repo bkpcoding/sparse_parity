@@ -192,7 +192,6 @@ class TemperatureDataLoader:
             dtype=self.dtype
         )
         
-        import ipdb; ipdb.set_trace()
         self.current_batch += 1
         return batch
     
@@ -203,7 +202,144 @@ class TemperatureDataLoader:
         """Update the sampling temperature."""
         self.temperature = new_temp
         self.sampling_probs = self._compute_sampling_probs()
-        print(f"Updated sampling probabilities: {self.sampling_probs}")
+
+class OnlineDataMixingSampler:
+    """
+    A DataLoader-like object that implements Online Data Mixing (ODM) based on the Exp3 algorithm.
+    Uses losses as rewards to dynamically adjust sampling probabilities across datasets.
+    Creates homogeneous batches (all samples from same dataset) to accurately attribute rewards.
+    """
+    def __init__(
+        self,
+        n_tasks: int,
+        n: int,
+        Ss: List[List[int]],
+        sizes: List[int],
+        batch_size: int = 32,
+        alpha_decay: float = 0.9,  # Moving average decay factor
+        warmup_steps: int = 1000,  # Number of steps before starting ODM
+        device: str = 'cpu',
+        dtype: torch.dtype = torch.float32
+    ):
+        self.n_tasks = n_tasks
+        self.n = n
+        self.Ss = Ss
+        self.sizes = sizes
+        self.batch_size = batch_size
+        self.alpha = alpha_decay
+        self.warmup_steps = warmup_steps
+        self.device = device
+        self.dtype = dtype
+        
+        # Initialize tracking variables
+        self.current_step = 0
+        self.K = len(Ss)  # Number of arms/datasets
+        
+        # Initialize cumulative domain losses for current batch
+        self.domain_losses = torch.zeros(self.K, device=device, dtype=dtype)
+        
+        # Initialize estimated rewards
+        self.estimated_rewards = torch.zeros(self.K, device=device, dtype=dtype)
+        
+        # Initialize sampling probabilities uniformly
+        self.sampling_probs = torch.ones(self.K, device=device, dtype=dtype) / self.K
+        
+        # Calculate number of batches
+        min_samples = min(sizes)
+        self.n_batches = min_samples // batch_size
+        if min_samples % batch_size != 0:
+            self.n_batches += 1
+            
+    def get_exploration_rate(self) -> float:
+        """Calculate exploration rate for current step using decay schedule."""
+        if self.current_step < self.warmup_steps:
+            return 1.0 / self.K
+        # Ensure exploration rate doesn't get too small
+        return max(0.01, min(1.0/self.K, np.sqrt(np.log(self.K)/(self.K * max(1, self.current_step)))))
+        
+    def update_policy(self, dataset_idx: int, loss: float):
+        """
+        Update sampling distribution based on observed loss for selected dataset.
+        Following Algorithm 1 from the paper exactly.
+        
+        Args:
+            dataset_idx: Index of the dataset that was sampled
+            loss: Loss value from training on the batch
+        """
+        if self.current_step < self.warmup_steps:
+            return
+            
+        # Clip loss to prevent extreme values
+        loss = min(max(loss, 1e-8), 1e3)
+        
+        # Get current probability for importance weighting
+        current_prob = max(self.sampling_probs[dataset_idx].item(), 1e-8)
+        
+        # Calculate importance weighted reward as per paper
+        importance_weighted_reward = loss / current_prob
+        
+        # Update moving average of rewards
+        old_reward = self.estimated_rewards[dataset_idx].item()
+        new_reward = self.alpha * old_reward + (1 - self.alpha) * importance_weighted_reward
+        # print(f"old reward: {old_reward}, importance weighted reward: {importance_weighted_reward}, alpha: {self.alpha}, intermediate reward: {self.alpha * old_reward}, {(1 - self.alpha) * importance_weighted_reward}")
+        # print(f"new reward: {new_reward}")
+        self.estimated_rewards[dataset_idx] = new_reward
+        
+        # Calculate exploration rate
+        exploration_rate = self.get_exploration_rate()
+        
+        # Scale rewards to prevent numerical instability
+        scaled_rewards = self.estimated_rewards - self.estimated_rewards.mean()
+        if torch.std(scaled_rewards) > 0:
+            scaled_rewards = scaled_rewards / torch.std(scaled_rewards)
+            
+        # Compute probabilities using stable softmax
+        logits = scaled_rewards / exploration_rate
+        max_logit = torch.max(logits)
+        exp_logits = torch.exp(logits - max_logit)
+        softmax_probs = exp_logits / (exp_logits.sum() + 1e-8)
+        
+        # Ensure minimum exploration probability for each arm
+        min_prob = exploration_rate / self.K
+        self.sampling_probs = (1 - self.K * min_prob) * softmax_probs + min_prob
+        
+        # Final numerical stability checks
+        self.sampling_probs = torch.clamp(self.sampling_probs, min=1e-8)
+        self.sampling_probs = self.sampling_probs / self.sampling_probs.sum()
+
+    def sample_dataset(self) -> int:
+        """Sample a dataset index according to current policy."""
+        return torch.multinomial(self.sampling_probs, num_samples=1).item()
+        
+    def __iter__(self):
+        self.current_batch = 0
+        return self
+        
+    def __next__(self) -> Tuple[torch.Tensor, torch.Tensor, int]:
+        if self.current_batch >= self.n_batches:
+            raise StopIteration
+            
+        # Sample a single dataset according to policy
+        dataset_idx = self.sample_dataset()
+        
+        # Generate homogeneous batch from selected dataset
+        batch = get_batch(
+            n_tasks=self.n_tasks,
+            n=self.n, 
+            Ss=[self.Ss[dataset_idx]],  # Only use selected dataset
+            codes=[dataset_idx],
+            sizes=[self.batch_size],  # Full batch size from selected dataset
+            device=self.device,
+            dtype=self.dtype
+        )
+        
+        self.current_batch += 1
+        self.current_step += 1
+        
+        return batch[0], batch[1], dataset_idx
+        
+    def __len__(self) -> int:
+        return self.n_batches
 
 # Example usage
 if __name__ == "__main__":

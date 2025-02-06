@@ -107,3 +107,73 @@ def create_model(n_tasks, n, width, depth, activation_fn, device, dtype):
             layers.append(activation_fn())
     return nn.Sequential(*layers).to(device)
 
+
+def create_transformer(n_tasks, n, n_heads=4, n_layers=2, d_model=128, d_ff=512, device='cuda', dtype=torch.float32):
+    """Create and initialize a Transformer model for the parity task.
+    
+    Parameters
+    ----------
+    n_tasks : int
+        Number of tasks
+    n : int
+        Input dimension (excluding task embedding)
+    n_heads : int
+        Number of attention heads
+    n_layers : int
+        Number of transformer layers
+    d_model : int
+        Dimension of the model's hidden states
+    d_ff : int
+        Dimension of feed-forward network
+    device : str
+        Device to put the model on
+    dtype : torch.dtype
+        Data type for the model parameters
+        
+    Returns
+    -------
+    nn.Module
+        The transformer model
+    """
+    class ParityTransformer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            
+            # Input projection layer (from input dimension to d_model)
+            self.input_proj = nn.Linear(n_tasks + n, d_model)
+            
+            # Transformer encoder layer
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=n_heads,
+                dim_feedforward=d_ff,
+                batch_first=True
+            )
+            
+            # Stack of transformer layers
+            self.transformer = nn.TransformerEncoder(
+                encoder_layer,
+                num_layers=n_layers
+            )
+            
+            # Output projection layer
+            self.output_proj = nn.Linear(d_model, 2)
+            
+        def forward(self, x):
+            # Project input to d_model dimensions
+            x = self.input_proj(x)
+            
+            # Add dummy sequence dimension (transformer expects [batch, seq_len, features])
+            x = x.unsqueeze(1)
+            
+            # Pass through transformer
+            x = self.transformer(x)
+            
+            # Remove sequence dimension and project to output
+            x = x.squeeze(1)
+            x = self.output_proj(x)
+            
+            return x
+    
+    return ParityTransformer().to(device=device, dtype=dtype)
+

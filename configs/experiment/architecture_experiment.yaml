@@ -1,0 +1,37 @@
+defaults:
+  - _self_
+  - ../base_config@_global_
+
+n: 10  # input dimension
+k: 3   # parity bits to count
+n_tasks: 5
+n_ensembles: 5
+max_steps: 10000
+batch_size: 128
+convergence_threshold: 0.01
+check_convergence_every: 100
+use_wandb: false
+plot_losses: false
+activation: "ReLU"
+
+# MLP specific parameters
+mlp_width: 128
+mlp_depth: 4
+
+# Transformer specific parameters
+transformer_heads: 4
+transformer_layers: 2
+transformer_d_model: 128
+transformer_d_ff: 512
+
+optimizer:
+  adamw_lr: 0.001
+  weight_decay: 0.01
+
+distribution_type: "zipf"
+alpha: 2.0
+offset: 0
+
+device: "cuda"
+dtype: "float32"
+seed: 42
